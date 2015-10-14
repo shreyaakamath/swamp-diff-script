@@ -13,33 +13,103 @@ my $tag_elem;
 my $dup=0;
 my $missing=0;
 my $type;
+my $compare;
+my $type_str;
+my $dupsOnly_ip;
+my $dupsOnly=0;
+my $summary_ip=1;
+my $summary=1;
+my $hash_csv_count;
+my $hash_xml_count;
+my $elem_xml;
+
 my $result = GetOptions ('file1=s' => \$file1,
 								'file2=s' => \$file2,
 								'output=s' => \$output,
-								'tag_elements=s' => \$tag_elem,
-								 'type=s' => \$type);
+								'type=s' => \$type_str,
+								'compare=s' => \$compare,
+								'dupsOnly=s' => \$dupsOnly_ip,
+								 'summary=s' => \$summary);
 
 if (!defined($output))
 {
 				$output = "diff_out";
 }
-#print "$file1 and $file2\n";SK
-#print "this is file2 $file2 \n";SK
 open(my $fh,"<",$file2) or die ("file not found"); 
 open(my $fh_out,">",$output) or die ("cannot create output file");
 
-###############################################################parsing file1#########################################################################################
+#use the compare tag elements to decide which key to use while creating the hash 
+my @words = split/,/,$compare;
+my %hash_words = map{$_ => 1}@words;
+my $key_code = "code";
+my $key_line = "line";
+my $key_file = "file";
+if(exists $hash_words{$key_code} && exists $hash_words{$key_line} && $hash_words{$key_file}){
+	$tag_elem = 1; 
+}
+elsif( exists $hash_words{$key_line} && $hash_words{$key_file}){
+	$tag_elem = 2; 
+}
+
+elsif($hash_words{$key_file}){
+	$tag_elem = 3; 
+}
+elsif(exists $hash_words{$key_code}){
+	$tag_elem = 4; 
+}
+
+#use the type tag elements to decide which type of files are being compared 
+my $s2c = "scarfToCodedx";
+my $c2s = "codedxToScarf";
+my $c2c = "codedxToCodedx";
+my $s2s = "scarfToScarf";
+
+if($type_str eq $s2c) {
+				print "in s2c";
+				$type=1;
+} 
+elsif($type_str eq $c2s){
+				print "in c2s";
+				$type=2;
+}
+elsif($type_str eq $c2c){
+				$type=3;
+}
+elsif($type_str eq $s2s){
+				$type =3;
+}
+
+#find out if we need to print only dups or print the diff of the files 
+my $yes ="yes";
+my $no = "no";
+
+if(uc($dupsOnly_ip) eq uc($yes)){
+				$dupsOnly=1;
+}
+elsif(uc($dupsOnly_ip) eq uc($no)){
+	$dupsOnly=0;
+}
+
+#do we need to print the summary 
+if(uc($summary) eq uc($yes)){
+				$summary=1;
+}
+elsif(uc($summary) eq uc($no)){
+	$summary=0;
+}
+
+#global vars
 my $count_xml = 0;
 my %hash_xml;
 my %hash_csv;
 my %hash_xml2;
-my $count_dup = 0;
+my $count_dup_file1 = 0;
+my $count_dup_file2 =0;	
 
 my $xpath = "BugInstance";  
 my $twig = new XML::Twig(TwigHandlers => {
 								$xpath => \&parse_routine
 								});
-print "this is file1 --- $file1";
 $twig->parsefile($file1);
 
 my $twig2 = new XML::Twig(TwigHandlers => {
@@ -52,6 +122,7 @@ $twig2->parsefile($file2);
 sub parse_routine {
 				my $start_line;
 				my $end_line;
+					
 				my ($tree,$elem) = @_;
 				my $file_name = $elem->first_child('BugLocations')->first_child('Location')->first_child('SourceFile')->field;
 				$file_name = lc($file_name);
@@ -95,21 +166,19 @@ sub parse_routine {
 				my $tag;
 				switch ($tag_elem)
 				{
-								case "4" {$tag = $file_name.':'.$start_line.":".$end_line.":".$bug_code.":".$bug_msg}
-								case "3" {$tag = $file_name.':'.$start_line.":".$end_line.":".$bug_code}
+								case "1" {$tag = $file_name.':'.$start_line.":".$end_line.":".$bug_code}
 								case "2" {$tag = $file_name.':'.$start_line.":".$end_line}
-								case "1" {$tag = $file_name}
+								case "3" {$tag = $file_name}
+								case "4" {$tag = $bug_code}
 				}
 				if (!exists($hash_xml{$tag}))
 				{
 								$hash_xml{$tag} = {'count'=>1,'bugid'=>$bug_id, 'startline'=>$start_line, 'endline'=>$end_line, 'filename'=>$file_name,'bugcode'=>$bug_code};
-								$count_xml++;
 				}
 				else
 				{
 								$hash_xml{$tag}->{count} = $hash_xml{$tag}->{count}+1;
-								$hash_xml{$tag}->{bugid} = $hash_xml{$tag}->{bugid}."\n\t".$bug_id;
-								$count_dup++;	
+								$count_dup_file1++;
 				}
 				$tree->purge;
 
@@ -117,10 +186,8 @@ sub parse_routine {
 
 #parse file2
 sub parse_routine2 {	
-				print "calling parse_routine2\n";
 				my $start_line_csv;
 				my $end_line_csv;
-				my $count_csv =0;		
 				my ($tree_csv,$elem_csv) = @_;
 				if ($elem_csv->first_child('BugLocations') == 0){
 								next;
@@ -165,71 +232,82 @@ sub parse_routine2 {
 				my $tag_csv;
 				switch ($tag_elem)
 				{
-								case "4" {$tag_csv = $file_name_csv.':'.$start_line_csv.':'.$end_line_csv.':'.$bug_code_csv.":".$bug_msg_csv}
-								case "3" {$tag_csv = $file_name_csv.':'.$start_line_csv.':'.$end_line_csv.':'.$bug_code_csv}
+								case "1" {$tag_csv = $file_name_csv.':'.$start_line_csv.':'.$end_line_csv.':'.$bug_code_csv}
 								case "2" {$tag_csv = $file_name_csv.':'.$start_line_csv.':'.$end_line_csv}
-								case "1" {$tag_csv = $file_name_csv}
+								case "3" {$tag_csv = $file_name_csv}
+								case "4" {$tag_csv = $bug_code_csv}
 				}
 
-				print "in parse routine 2 tag value is $tag_csv\n";
 				if ($hash_csv{$tag_csv} == 0)
 				{
-								#hash_csv{$tag_csv} = {'count'=>1,'bugid'=>$bug_id_csv, 'startline'=>$start_line_csv, 'endline'=>$end_line_csv, 'location'=>$location_csv};
 								$hash_csv{$tag_csv} = {'count'=>1,'bugid'=>$bug_id_csv, 'startline'=>$start_line_csv, 'endline'=>$end_line_csv, 'filename'=>$file_name_csv,'bugcode'=>$bug_code_csv};
-								$count_csv++;
+								
 				}
 				else
 				{
 								$hash_csv{$tag_csv}->{count} = $hash_csv{$tag_csv}->{count}+1;
-								$hash_csv{$tag_csv}->{bugid} = $hash_csv{$tag_csv}->{bugid}.",".$bug_id_csv;
+								$count_dup_file2++;
+								
 				}
 				$tree_csv->purge;
 }	
 
-
-
-#my $tb = Text::Table->new("Bug Id", "Start Line" , "End Line");
-print $fh_out "\n\tBugID\tStartLine\t\tEndLine\t\tBugCode\t\t\tFileName\n";
-my $elem_xml;
-my $elem_csv2;
-my $count_cmp = 0;
-print "-----hash_csv value ---\n";
-print Dumper(\%hash_csv);
-print "------hash xml value ---- \n";
-print Dumper(\%hash_xml);
-foreach my $elem_xml (keys %hash_xml)
-{
-				$count_cmp++;
-				$elem_csv2 = $elem_xml;
-				print "----- elem_csv -----";
-				print Dumper(\$elem_csv2); 
-
-				print "----  hash_csv{$elem_csv2}------\n";
-				print Dumper(\$hash_csv{$elem_csv2});
-
-				if (( $hash_csv{$elem_csv2}==0))
-				{
-								print "not an exact match $elem_csv2";
-								$missing++;
-								print $fh_out "-\t $hash_xml{$elem_xml}->{bugid}\t\t$hash_xml{$elem_xml}->{startline}\t\t$hash_xml{$elem_xml}->{endline}\t$hash_xml{$elem_xml}->{bugcode}\t\t$hash_xml{$elem_xml}->{filename}\n";
-#tb->load([$hash_xml{$elem_xml}->{bugid},$hash_xml{$elem_xml}->{startline},$hash_xml{$elem_xml}->{endline}]);
+#get total no of bug instances in each file
+$hash_csv_count = keys %hash_csv;
+$hash_xml_count = keys %hash_xml;
+	
+#if user has not asked for summary then print detailed results
+if($summary ==0){
+	#if the user has not asked for only dups then print the details diff format
+	if($dupsOnly ==0){
+		print $fh_out "\n\tBugID\tStartLine\t\tEndLine\t\tBugCode\t\t\tFileName\n";
+		foreach my $elem_xml (keys %hash_xml)
+		{
+						if (( $hash_csv{$elem_xml}==0))
+						{
+										$missing++;
+										print $fh_out "-\t $hash_xml{$elem_xml}->{bugid}\t\t$hash_xml{$elem_xml}->{startline}\t\t$hash_xml{$elem_xml}->{endline}\t$hash_xml{$elem_xml}->{bugcode}\t\t$hash_xml{$elem_xml}->{filename}\n";
+						}
+						else
+						{
+										$dup++;
+										print $fh_out "+\t$hash_xml{$elem_xml}->{bugid}\t\t$hash_xml{$elem_xml}->{startline}\t\t$hash_xml{$elem_xml}->{endline}\t$hash_xml{$elem_xml}->{bugcode}\t\t$hash_xml{$elem_xml}->{filename}\n";
+						}
+		}
+	} 
+	#user wants to see only the diff
+	else{
+		#print diffs only if diffs exist
+		if($count_dup_file1>0){
+			print $fh_out "\n Duplicates in ".$file1." :\n";
+			print $fh_out "\n\tBugID\tStartLine\t\tEndLine\t\tBugCode\t\t\tFileName\n";
+			foreach my $elem_xml (keys %hash_xml){
+				if($hash_xml{$elem_xml}->{count}>1){
+					print $fh_out "\t $hash_xml{$elem_xml}->{bugid}\t\t$hash_xml{$elem_xml}->{startline}\t\t$hash_xml{$elem_xml}->{endline}\t$hash_xml{$elem_xml}->{bugcode}\t\t$hash_xml{$elem_xml}->{filename}\n";
 				}
-				else
-				{
-								$dup++;
-								print "is an exact match $elem_csv2";
-#tb->load([$hash_csv{$elem_xml}->{bugid},$hash_csv{$elem_xml}->{startline},$hash_csv{$elem_xml}->{endline}]);
-								print $fh_out "+\t$hash_xml{$elem_xml}->{bugid}\t\t$hash_xml{$elem_xml}->{startline}\t\t$hash_xml{$elem_xml}->{endline}\t$hash_xml{$elem_xml}->{bugcode}\t\t$hash_xml{$elem_xml}->{filename}\n";
+			}
+		}
+		
+		if($count_dup_file2>0){
+			print $fh_out "\n Duplicates in ".$file2." :\n";
+			print $fh_out "\n\tBugID\tStartLine\t\tEndLine\t\tBugCode\t\t\tFileName\n";
+			foreach my $elem_xml (keys %hash_csv){
+				if($hash_csv{$elem_xml}->{count} >1){
+					print $fh_out "\t $hash_csv{$elem_xml}->{bugid}\t\t$hash_csv{$elem_xml}->{startline}\t\t$hash_csv{$elem_xml}->{endline}\t$hash_csv{$elem_xml}->{bugcode}\t\t$hash_csv{$elem_xml}->{filename}\n";
 				}
+			}
+		}
+	
+	}
 }
-#print $tb;
-my $hash_csv_count = keys %hash_csv;
-my $hash_xml_count = keys %hash_xml;
-printf $fh_out "\n-------Summary--------\n";
-print $fh_out "\nTotal differences found in $file1 = $hash_xml_count\n";
-print $fh_out "\nTotal differences found in $file2 = $hash_csv_count\n";
-print $fh_out "\nNumber of Bug Instances present in both $file1 and $file2= $dup\n ";
-print $fh_out "\nNumber of Bug Instances present in $file1 but NOT in  $file2= $missing\n \n";
+elsif($summary==1){
+	print $fh_out "\nTotal unique bug instances found in $file1 = $hash_xml_count\n";
+	print $fh_out "\nTotal unique bug instances found in $file2 = $hash_csv_count\n";
+	print $fh_out "\nTotal duplicate bug instances found in $file1 = $count_dup_file1\n";
+	print $fh_out "\nTotal duplicate bug instances found in $file2 = $count_dup_file2\n";
+	print $fh_out "\nNumber of Bug Instances present in both $file1 and $file2= $dup\n ";
+	print $fh_out "\nNumber of Bug Instances present in $file1 but NOT in  $file2= $missing\n \n";
+}
 close ($fh) or die ("unable to close the xml file");
 close ($fh_out) or die ("unable to close the csv file");
 
